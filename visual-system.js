@@ -7,11 +7,11 @@
   const CYCLE_DURATION = 24000;
   const FRAME_INTERVAL = 1000 / 30;
   const PHASES = [
-    { start: 0, duration: 2400, arc: 4 },
-    { start: 2700, duration: 2500, arc: 3 },
-    { start: 5550, duration: 2350, arc: 2 },
-    { start: 8250, duration: 2550, arc: 1 },
-    { start: 11150, duration: 2450, arc: 0 }
+    { start: 1600, duration: 2400, arc: 4 },
+    { start: 4300, duration: 2500, arc: 3 },
+    { start: 7150, duration: 2350, arc: 2 },
+    { start: 9850, duration: 2550, arc: 1 },
+    { start: 12750, duration: 2450, arc: 0 }
   ];
   const FINAL_PHASE = PHASES[PHASES.length - 1];
   const SEQUENCE_END = FINAL_PHASE.start + FINAL_PHASE.duration;
@@ -24,16 +24,55 @@
     blue: [100, 136, 181]
   };
   const ARC_COLORS = [
-    [181, 125, 82],
-    [185, 153, 91],
-    [83, 132, 128],
-    [87, 116, 150],
-    [107, 94, 141]
+    [233, 185, 138],
+    [127, 211, 178],
+    [111, 168, 255],
+    [177, 140, 255],
+    [255, 138, 198]
   ];
+  const ARC_OPACITIES = [0.28, 0.26, 0.24, 0.22, 0.2];
   const RECOGNITION_COLORS = [
     [237, 226, 210],
     [205, 154, 99],
     [132, 164, 190]
+  ];
+  const P_PATH_SEGMENTS = [
+    {
+      x0: 0.35, y0: 0.9,
+      x1: 0.4, y1: 0.9,
+      x2: 0.46, y2: 0.9,
+      x3: 0.5, y3: 0.9
+    },
+    {
+      x0: 0.5, y0: 0.9,
+      x1: 0.535, y1: 0.9,
+      x2: 0.545, y2: 0.62,
+      x3: 0.63, y3: 0.46
+    },
+    {
+      x0: 0.63, y0: 0.46,
+      x1: 0.72, y1: 0.31,
+      x2: 0.93, y2: 0.25,
+      x3: 1.035, y3: 0.36
+    },
+    {
+      x0: 1.035, y0: 0.36,
+      x1: 1.105, y1: 0.43,
+      x2: 1.075, y2: 0.63,
+      x3: 0.96, y3: 0.72
+    },
+    {
+      x0: 0.96, y0: 0.72,
+      x1: 0.86, y1: 0.8,
+      x2: 0.7, y2: 0.79,
+      x3: 0.63, y3: 0.85
+    },
+    {
+      x0: 0.63, y0: 0.85,
+      x1: 0.585, y1: 0.89,
+      x2: 0.62, y2: 0.94,
+      x3: 0.535, y3: 0.96
+    }
   ];
 
   const clamp = (value, minimum, maximum) =>
@@ -81,21 +120,64 @@
     return STAR_COLORS.amber;
   };
 
-  const cubicPoint = (path, t) => {
+  const cubicPoint = (segment, t) => {
     const inverse = 1 - t;
     const inverseSquared = inverse * inverse;
     const tSquared = t * t;
     return {
       x:
-        inverseSquared * inverse * path.x0 +
-        3 * inverseSquared * t * path.x1 +
-        3 * inverse * tSquared * path.x2 +
-        tSquared * t * path.x3,
+        inverseSquared * inverse * segment.x0 +
+        3 * inverseSquared * t * segment.x1 +
+        3 * inverse * tSquared * segment.x2 +
+        tSquared * t * segment.x3,
       y:
-        inverseSquared * inverse * path.y0 +
-        3 * inverseSquared * t * path.y1 +
-        3 * inverse * tSquared * path.y2 +
-        tSquared * t * path.y3
+        inverseSquared * inverse * segment.y0 +
+        3 * inverseSquared * t * segment.y1 +
+        3 * inverse * tSquared * segment.y2 +
+        tSquared * t * segment.y3
+    };
+  };
+
+  const buildPathLookup = (segments, samplesPerSegment = 24) => {
+    const lookup = [];
+    let distance = 0;
+    let previousPoint = cubicPoint(segments[0], 0);
+    lookup.push({ distance, point: previousPoint });
+
+    segments.forEach((segment) => {
+      for (let sample = 1; sample <= samplesPerSegment; sample += 1) {
+        const point = cubicPoint(segment, sample / samplesPerSegment);
+        distance += Math.hypot(
+          point.x - previousPoint.x,
+          point.y - previousPoint.y
+        );
+        lookup.push({ distance, point });
+        previousPoint = point;
+      }
+    });
+
+    return { lookup, totalLength: distance };
+  };
+
+  const pathPoint = (path, t) => {
+    const target = clamp(t, 0, 1) * path.totalLength;
+    const lookup = path.lookup;
+    let low = 0;
+    let high = lookup.length - 1;
+
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (lookup[middle].distance < target) low = middle + 1;
+      else high = middle;
+    }
+
+    const next = lookup[low];
+    const previous = lookup[Math.max(0, low - 1)];
+    const span = Math.max(0.0001, next.distance - previous.distance);
+    const amount = clamp((target - previous.distance) / span, 0, 1);
+    return {
+      x: mix(previous.point.x, next.point.x, amount),
+      y: mix(previous.point.y, next.point.y, amount)
     };
   };
 
@@ -346,33 +428,82 @@
 
     createArcs() {
       const isMobile = this.width < 600;
-      const isTablet = this.width >= 600 && this.width < 1000;
-      const gap = clamp(
-        this.height * (isMobile ? 0.015 : 0.018),
-        isMobile ? 10 : 12,
-        isMobile ? 14 : 18
+      const isTablet = this.width < 1000;
+      const isShort = window.innerHeight <= 720 && this.width >= 801;
+      const sectionTop = Math.max(
+        0,
+        this.section.getBoundingClientRect().top
       );
-      const startX =
-        this.width * (isMobile ? 0.46 : isTablet ? 0.51 : 0.56);
-      const endX = this.width * 1.055;
-      const span = endX - startX;
-      const startY = this.height * (isMobile ? 0.73 : 0.69);
-      const endY = this.height * (isMobile ? 0.61 : 0.56);
-      const controlY1 = this.height * (isMobile ? 0.51 : 0.39);
-      const controlY2 = this.height * (isMobile ? 0.46 : 0.34);
+      const visibleHeight = Math.max(
+        1,
+        Math.min(this.height, window.innerHeight - sectionTop)
+      );
+      const designHeight = Math.min(
+        this.height,
+        visibleHeight,
+        clamp(this.width * 0.72, 520, 820)
+      );
+      const designTop = Math.min(
+        Math.max(0, this.height - designHeight),
+        Math.max(0, visibleHeight - designHeight)
+      );
+      const spacingScale = clamp(434 / designHeight, 0.6, 1.15);
+      const focus = { x: 1.02, y: 0.94 };
+
+      const responsivePoint = (point) => {
+        let x = point.x;
+        let y = point.y;
+
+        if (isMobile) {
+          x = 0.18 + x * 0.93;
+          y = 0.29 + y * 0.72;
+        } else if (isTablet) {
+          x = 0.1 + x * 0.96;
+          y = 0.11 + y * 0.88;
+        } else {
+          x = 0.12 + x * 0.97;
+          y = (isShort ? 0.06 : 0.08) + y * 0.92;
+        }
+
+        return {
+          x: x * this.width,
+          y: designTop + y * designHeight
+        };
+      };
 
       return ARC_COLORS.map((color, index) => {
-        const inset = index * gap;
+        const nesting = index * 0.075 * spacingScale;
+        const transformCoordinate = (x, y) =>
+          responsivePoint({
+            x: mix(x, focus.x, nesting),
+            y:
+              mix(y, focus.y, nesting) +
+              index * 0.011 * spacingScale
+          });
+        const segments = P_PATH_SEGMENTS.map((segment) => {
+          const start = transformCoordinate(segment.x0, segment.y0);
+          const controlOne = transformCoordinate(segment.x1, segment.y1);
+          const controlTwo = transformCoordinate(segment.x2, segment.y2);
+          const end = transformCoordinate(segment.x3, segment.y3);
+          return {
+            x0: start.x,
+            y0: start.y,
+            x1: controlOne.x,
+            y1: controlOne.y,
+            x2: controlTwo.x,
+            y2: controlTwo.y,
+            x3: end.x,
+            y3: end.y
+          };
+        });
+        const metrics = buildPathLookup(segments);
+
         return {
           color,
-          x0: startX + inset * 0.95,
-          y0: startY + inset * 0.85,
-          x1: startX + span * 0.28 + inset * 0.35,
-          y1: controlY1 + inset * 0.88,
-          x2: startX + span * 0.66 + inset * 0.1,
-          y2: controlY2 + inset * 0.75,
-          x3: endX + inset * 0.04,
-          y3: endY + inset * 0.74
+          opacity: ARC_OPACITIES[index],
+          segments,
+          lookup: metrics.lookup,
+          totalLength: metrics.totalLength
         };
       });
     }
@@ -394,9 +525,9 @@
             .map((star) => {
               let nearestDistance = Infinity;
               let nearestT = 0;
-              for (let sample = 2; sample <= 28; sample += 1) {
+              for (let sample = 4; sample <= 23; sample += 1) {
                 const t = sample / 30;
-                const point = cubicPoint(arc, t);
+                const point = pathPoint(arc, t);
                 const distance = Math.hypot(star.x - point.x, star.y - point.y);
                 if (distance < nearestDistance) {
                   nearestDistance = distance;
@@ -452,18 +583,25 @@
       for (const star of this.stars) this.drawStar(context, star);
 
       if (this.mode === "hero") {
-        const mobileIntensity = this.width < 600 ? 0.78 : 1;
+        const mobileIntensity = this.width < 600 ? 0.82 : 1;
+        const strokeWidth =
+          this.width < 600 ? 0.6 : this.width < 1000 ? 0.75 : 1;
+        context.globalCompositeOperation = "screen";
         for (const arc of this.arcs) {
-          this.traceArc(context, arc);
-          context.strokeStyle = rgba(arc.color, 0.045 * mobileIntensity);
-          context.lineWidth = this.width < 600 ? 3.2 : 4.4;
-          context.stroke();
-
-          this.traceArc(context, arc);
-          context.strokeStyle = rgba(arc.color, 0.34 * mobileIntensity);
-          context.lineWidth = this.width < 600 ? 0.85 : 1.05;
-          context.stroke();
+          this.strokeArc(
+            context,
+            arc,
+            0.022 * mobileIntensity,
+            strokeWidth * 3
+          );
+          this.strokeArc(
+            context,
+            arc,
+            arc.opacity * mobileIntensity,
+            strokeWidth
+          );
         }
+        context.globalCompositeOperation = "source-over";
       }
     }
 
@@ -521,26 +659,34 @@
       context.fill();
     }
 
-    traceArc(context, arc) {
-      context.beginPath();
-      context.moveTo(arc.x0, arc.y0);
-      context.bezierCurveTo(
-        arc.x1,
-        arc.y1,
-        arc.x2,
-        arc.y2,
-        arc.x3,
-        arc.y3
-      );
-    }
-
     traceArcSegment(context, arc, startT, endT, samples = 9) {
       context.beginPath();
       for (let index = 0; index <= samples; index += 1) {
         const t = mix(startT, endT, index / samples);
-        const point = cubicPoint(arc, t);
+        const point = pathPoint(arc, t);
         if (index === 0) context.moveTo(point.x, point.y);
         else context.lineTo(point.x, point.y);
+      }
+    }
+
+    strokeArc(context, arc, alpha, width) {
+      const chunks = 30;
+      context.lineCap = "round";
+
+      for (let index = 0; index < chunks; index += 1) {
+        const startT = index / chunks;
+        const endT = (index + 1) / chunks;
+        const midpoint = (startT + endT) / 2;
+        const edgeFade = Math.min(
+          smoothstep(midpoint / 0.09),
+          smoothstep((1 - midpoint) / 0.12)
+        );
+        if (edgeFade <= 0.005) continue;
+
+        this.traceArcSegment(context, arc, startT, endT, 5);
+        context.strokeStyle = rgba(arc.color, alpha * edgeFade);
+        context.lineWidth = width;
+        context.stroke();
       }
     }
 
@@ -562,26 +708,29 @@
       const context = this.context;
       const progress = smoothstep(active.progress);
       const intensity = Math.pow(Math.sin(Math.PI * progress), 1.05);
-      const signalT = mix(0.04, 0.94, progress);
+      const signalT = mix(0.015, 0.97, progress);
+      const returnProgress = smoothstep((signalT - 0.78) / 0.18);
+      const pointIntensity = intensity * mix(1, 0.16, returnProgress);
+      const strokeWidth =
+        this.width < 600 ? 0.6 : this.width < 1000 ? 0.75 : 1;
 
-      this.traceArc(context, arc);
-      context.strokeStyle = rgba(arc.color, 0.11 * intensity);
-      context.lineWidth = this.width < 600 ? 4.2 : 5.4;
-      context.stroke();
+      context.globalCompositeOperation = "screen";
+      this.strokeArc(context, arc, 0.02 * intensity, strokeWidth * 3);
+      this.strokeArc(context, arc, 0.14 * intensity, strokeWidth);
 
-      this.traceArc(context, arc);
-      context.strokeStyle = rgba(arc.color, 0.46 * intensity);
-      context.lineWidth = this.width < 600 ? 1.1 : 1.35;
-      context.stroke();
-
-      const trailStart = clamp(signalT - 0.035, 0, 1);
+      const trailStart = clamp(signalT - 0.025, 0, 1);
       this.traceArcSegment(context, arc, trailStart, signalT);
-      context.strokeStyle = rgba(STAR_COLORS.cream, 0.44 * intensity);
-      context.lineWidth = this.width < 600 ? 1.1 : 1.4;
+      context.strokeStyle = rgba(
+        STAR_COLORS.cream,
+        0.34 * pointIntensity
+      );
+      context.lineWidth = this.width < 600 ? 0.85 : 1.1;
+      context.lineCap = "round";
       context.stroke();
+      context.globalCompositeOperation = "source-over";
 
-      const point = cubicPoint(arc, signalT);
-      const pointRadius = this.width < 600 ? 5 : 6.5;
+      const point = pathPoint(arc, signalT);
+      const pointRadius = this.width < 600 ? 3.6 : 4.6;
       const glow = context.createRadialGradient(
         point.x,
         point.y,
@@ -590,26 +739,29 @@
         point.y,
         pointRadius
       );
-      glow.addColorStop(0, rgba(STAR_COLORS.white, 0.82 * intensity));
-      glow.addColorStop(0.26, rgba(STAR_COLORS.cream, 0.28 * intensity));
+      glow.addColorStop(0, rgba(STAR_COLORS.white, 0.74 * pointIntensity));
+      glow.addColorStop(
+        0.26,
+        rgba(STAR_COLORS.cream, 0.24 * pointIntensity)
+      );
       glow.addColorStop(1, rgba(STAR_COLORS.cream, 0));
       context.fillStyle = glow;
       context.beginPath();
       context.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
       context.fill();
 
-      context.fillStyle = rgba(STAR_COLORS.cream, 0.92 * intensity);
+      context.fillStyle = rgba(STAR_COLORS.cream, 0.82 * pointIntensity);
       context.beginPath();
       context.arc(
         point.x,
         point.y,
-        this.width < 600 ? 0.95 : 1.2,
+        this.width < 600 ? 0.75 : 0.95,
         0,
         Math.PI * 2
       );
       context.fill();
 
-      this.drawRecognitions(active.arc, signalT, intensity);
+      this.drawRecognitions(active.arc, signalT, pointIntensity);
     }
 
     drawRecognitions(arcIndex, signalT, phaseIntensity) {
